@@ -8,8 +8,10 @@
 .EXAMPLE
    <An example of using the script>
 #>
-param([string]$fileName = $( `
-		Throw "Parameter missing Please provide filename"))
+param(
+	[string]$fileName = $( Throw "Parameter missing Please provide filename"),
+	[switch]$NoAuditTrail
+)
 if (!(Test-Path $fileName)) {Throw "The file - $fileName does not exist in the current directory"}
 [array]$multiIP = Get-Content $fileName
 
@@ -29,6 +31,7 @@ $avg = [double[]]::new($multiIP.Count)
 $drops = [int[]]::new($multiIP.Count)
 $prevStatus = [string[]]::new($multiIP.Count)
 $auditTrail = [string[]]::new($multiIP.Count)
+$stateStart = [datetime[]]::new($multiIP.Count)
 [long]$n = 1
 [int]$buckets = 20
 [int]$interval = 5000
@@ -54,7 +57,7 @@ while ($true)
 		})
 	if ($Tasks.Count -gt 0) { [Threading.Tasks.Task]::WaitAll($Tasks) }
 	Clear-Host
-	Write-Output("{0,-15}   {1,5} {2,7} {3,11} {4,-20} {5,5} {6,8} {7,8} {8,8}" -f "IP Address", "State", "RTT", "Min/Avg/Max", "History", "Drops", "Timeout", "Max T/O", "Since")
+	Write-Output("{0,-15}   {1,5} {2,7} {3,11} {4,-20} {5,5} {6,8} {7,8} {8,13}" -f "IP Address", "State", "RTT", "Min/Avg/Max", "History", "Drops", "Timeout", "Max T/O", "Up/down since")
 	[int]$t = 0
 	foreach ($loopIp in $multiIP)
 		{
@@ -114,12 +117,14 @@ while ($true)
 		if ([string]::IsNullOrEmpty($prevStatus[$i]))
 			{
 			$prevStatus[$i] = $result
+			$stateStart[$i] = Get-Date
 			}
 		elseif ($prevStatus[$i] -ne $result)
 			{
 			if ($result -eq "Up" -or $result -eq "Down") { Write-Host -NoNewLine "`a" }
-			$auditTrail[$i] = "{0,-15} changed to {1,4} at {2:HH:mm:ss}" -f $multiIP[$i], $result, (Get-Date)
+			if (-not $NoAuditTrail) { $auditTrail[$i] = "{0,-15} changed to {1,4} at {2:HH:mm:ss}" -f $multiIP[$i], $result, (Get-Date) }
 			$prevStatus[$i] = $result
+			$stateStart[$i] = Get-Date
 			}
 
 		if ($history[$i].length -lt $buckets)
@@ -179,21 +184,26 @@ while ($true)
 		$avg[$i] = $a * $rtt + $b * $avg[$i]
 		$stats = $min[$i].ToString() + '/' + [int]$avg[$i].ToString() + '/' + $max[$i].ToString()
 		
-		Write-Output("{0,-15}{1,3}{2,5} {3,5}ms {4,11} {5,-20} {6,5} {7:hh\:mm\:ss} {8:hh\:mm\:ss} {9:HH\:mm\:ss}{10,1}" -f $multiIP[$i],"is",$result,$Response.RoundtripTime,$stats,$history[$i],$drops[$i],$timeout_seconds[$i],$maxtimeout[$i],$longest_timeout_start[$i],$hl)	
+		$stateArrow = if ($result -eq "Up") { [char]0x2191 } else { [char]0x2193 }
+		$stateDisplay = "{0} {1:HH\:mm\:ss}" -f $stateArrow, $stateStart[$i]
+		Write-Output("{0,-15}{1,3}{2,5} {3,5}ms {4,11} {5,-20} {6,5} {7:hh\:mm\:ss} {8:hh\:mm\:ss} {9,13}{10,1}" -f $multiIP[$i],"is",$result,$Response.RoundtripTime,$stats,$history[$i],$drops[$i],$timeout_seconds[$i],$maxtimeout[$i],$stateDisplay,$hl)
 		$i++
 		$t++
 		}
 	$timeout_quantity = ($curtimeout | Measure-Object -Sum).Sum
 	
-	$auditCount = ($auditTrail | Where-Object { ![string]::IsNullOrEmpty($_) }).Count
-	if ($auditCount -gt 0)
+	if (-not $NoAuditTrail)
 		{
-		Write-Output("")
-		Write-Output("--- Audit Trail ---")
-		$sortedAudits = $auditTrail | Where-Object { ![string]::IsNullOrEmpty($_) } | Sort-Object { $_.Substring($_.Length - 8) }
-		foreach ($audit in $sortedAudits)
+		$auditCount = ($auditTrail | Where-Object { ![string]::IsNullOrEmpty($_) }).Count
+		if ($auditCount -gt 0)
 			{
-			Write-Output $audit
+			Write-Output("")
+			Write-Output("--- Audit Trail ---")
+			$sortedAudits = $auditTrail | Where-Object { ![string]::IsNullOrEmpty($_) } | Sort-Object { $_.Substring($_.Length - 8) }
+			foreach ($audit in $sortedAudits)
+				{
+				Write-Output $audit
+				}
 			}
 		}
 
